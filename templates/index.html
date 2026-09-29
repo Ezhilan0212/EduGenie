@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="EduGenie - Google Gemini powered learning assistant">
+  <title>EduGenie — Learning Assistant</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body>
+  <main class="container">
+    <header class="hero">
+      <div class="badge">AI LEARNING ASSISTANT</div>
+      <h1>EduGenie</h1>
+      <p>Ask questions, simplify concepts, summarize notes, generate quizzes, and build learning paths.</p>
+    </header>
+
+    <section class="card">
+      <form id="eduForm">
+        <label for="task">Choose a task</label>
+        <select id="task" name="task">
+          <option value="qa">Ask a Question</option>
+          <option value="explain">Explain a Concept</option>
+          <option value="quiz">Generate Quiz</option>
+          <option value="summarize">Summarize Text</option>
+          <option value="learn">Learning Path</option>
+        </select>
+
+        <div id="levelWrap" class="hidden">
+          <label for="level">Learner level</label>
+          <select id="level">
+            <option value="beginner">Beginner</option>
+            <option value="intermediate">Intermediate</option>
+            <option value="advanced">Advanced</option>
+          </select>
+        </div>
+
+        <label for="inputText" id="inputLabel">Your question</label>
+        <textarea id="inputText" rows="9" placeholder="Example: Which is the largest ocean?"></textarea>
+
+        <button id="submitBtn" type="submit">
+          <span id="buttonText">Generate Answer</span>
+          <span id="spinner" class="spinner hidden"></span>
+        </button>
+      </form>
+    </section>
+
+    <section id="resultCard" class="card result-card hidden">
+      <div class="result-heading">
+        <h2>Result</h2>
+        <button id="copyBtn" class="secondary" type="button">Copy</button>
+      </div>
+      <div id="result"></div>
+    </section>
+
+    <footer>
+      <span>EduGenie</span>
+      <span>FastAPI + Google Gemini</span>
+      <a href="/docs" target="_blank" rel="noopener">API Docs</a>
+    </footer>
+  </main>
+
+  <script>
+    const task = document.getElementById("task");
+    const levelWrap = document.getElementById("levelWrap");
+    const inputText = document.getElementById("inputText");
+    const inputLabel = document.getElementById("inputLabel");
+    const form = document.getElementById("eduForm");
+    const resultCard = document.getElementById("resultCard");
+    const result = document.getElementById("result");
+    const submitBtn = document.getElementById("submitBtn");
+    const buttonText = document.getElementById("buttonText");
+    const spinner = document.getElementById("spinner");
+    const copyBtn = document.getElementById("copyBtn");
+
+    const taskMeta = {
+      qa: ["Your question", "Example: Which is the largest ocean?"],
+      explain: ["Concept or topic", "Example: Explain the Pythagoras theorem simply."],
+      quiz: ["Topic or passage", "Paste a passage or enter a topic to generate 3 MCQs."],
+      summarize: ["Text to summarize", "Paste your educational notes or passage here."],
+      learn: ["Topic to learn", "Example: SQL"]
+    };
+
+    function updateForm() {
+      const current = task.value;
+      inputLabel.textContent = taskMeta[current][0];
+      inputText.placeholder = taskMeta[current][1];
+      levelWrap.classList.toggle("hidden", current !== "learn");
+      buttonText.textContent = {
+        qa: "Ask EduGenie",
+        explain: "Explain",
+        quiz: "Generate Quiz",
+        summarize: "Summarize",
+        learn: "Build Learning Path"
+      }[current];
+    }
+
+    function setLoading(loading) {
+      submitBtn.disabled = loading;
+      spinner.classList.toggle("hidden", !loading);
+      if (loading) buttonText.textContent = "Thinking...";
+      else updateForm();
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function renderText(text) {
+      return `<div class="answer">${escapeHtml(text).replaceAll("\\n", "<br>")}</div>`;
+    }
+
+    function renderQuiz(questions) {
+      return questions.map((q, index) => `
+        <article class="quiz-question" data-index="${index}">
+          <h3>${index + 1}. ${escapeHtml(q.question)}</h3>
+          <div class="options">
+            ${q.options.map((option, i) => `
+              <label class="option">
+                <input type="radio" name="q${index}" value="${escapeHtml(option)}">
+                <span>${String.fromCharCode(65 + i)}. ${escapeHtml(option)}</span>
+              </label>
+            `).join("")}
+          </div>
+          <button class="check-answer secondary" type="button" data-index="${index}">Check Answer</button>
+          <div class="feedback hidden" id="feedback-${index}"></div>
+        </article>
+      `).join("");
+    }
+
+    result.addEventListener("click", (event) => {
+      if (!event.target.classList.contains("check-answer")) return;
+      const index = Number(event.target.dataset.index);
+      const question = window.currentQuiz[index];
+      const selected = document.querySelector(`input[name="q${index}"]:checked`);
+      const feedback = document.getElementById(`feedback-${index}`);
+
+      if (!selected) {
+        feedback.textContent = "Please select an option first.";
+        feedback.className = "feedback wrong";
+        return;
+      }
+
+      const correct = selected.value === question.correct_answer;
+      feedback.textContent = correct
+        ? `Correct! ${question.explanation}`
+        : `Not quite. Correct answer: ${question.correct_answer}. ${question.explanation}`;
+      feedback.className = `feedback ${correct ? "correct" : "wrong"}`;
+    });
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const text = inputText.value.trim();
+      if (!text) {
+        alert("Please enter some text first.");
+        return;
+      }
+
+      setLoading(true);
+      resultCard.classList.remove("hidden");
+      result.innerHTML = "<div class='loading-message'>Generating your result...</div>";
+
+      try {
+        let endpoint;
+        let body;
+
+        if (task.value === "qa") {
+          endpoint = "/qa";
+          body = { question: text };
+        } else if (task.value === "explain") {
+          endpoint = "/explain";
+          body = { text };
+        } else if (task.value === "quiz") {
+          endpoint = "/quiz";
+          body = { text };
+        } else if (task.value === "summarize") {
+          endpoint = "/summarize";
+          body = { text };
+        } else {
+          endpoint = "/learn/recommendations";
+          body = { topic: text, level: document.getElementById("level").value };
+        }
+
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "Request failed.");
+
+        if (task.value === "quiz") {
+          window.currentQuiz = data.questions;
+          result.innerHTML = renderQuiz(data.questions);
+        } else {
+          result.innerHTML = renderText(data.answer || data.result);
+        }
+      } catch (error) {
+        result.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+      } finally {
+        setLoading(false);
+      }
+    });
+
+    copyBtn.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(result.innerText);
+      copyBtn.textContent = "Copied!";
+      setTimeout(() => copyBtn.textContent = "Copy", 1200);
+    });
+
+    task.addEventListener("change", updateForm);
+    updateForm();
+  </script>
+</body>
+</html>
